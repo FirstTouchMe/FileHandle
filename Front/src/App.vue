@@ -11,7 +11,7 @@
 
     <div v-if="isScanning" class="loading-overlay">
       <div class="spinner"></div>
-      <p>正在深度扫描本地 Word 文件，请稍候...</p>
+      <p>正在深度扫描本地文件，请稍候...</p>
     </div>
 
     <div class="list-container" v-if="files.length > 0 && !isScanning">
@@ -58,6 +58,17 @@
           </div>
 
           <div class="file-actions">
+            <button v-if="isWord(file.path)"
+                    class="icon-btn convert-btn"
+                    @click.stop="executeConvert(file, 'to_pdf')"
+                    :disabled="isMerging"
+                    title="一键转为 PDF">PDF</button>
+            <button v-if="isPdf(file.path)"
+                    class="icon-btn convert-btn-alt"
+                    @click.stop="executeConvert(file, 'to_word')"
+                    :disabled="isMerging"
+                    title="一键转为 Word">DOCX</button>
+
             <button class="icon-btn up-btn" @click.stop="moveUp(index)" :disabled="index === 0 || isMerging" title="上移">▲</button>
             <button class="icon-btn down-btn" @click.stop="moveDown(index)" :disabled="index === files.length - 1 || isMerging" title="下移">▼</button>
           </div>
@@ -78,7 +89,7 @@
         <button class="secondary-btn" @click="selectAll(false)" :disabled="isMerging">全不选</button>
       </div>
       <button class="success-btn" @click="executeMerge" :disabled="isMerging">
-        {{ isMerging ? '合并中，请稍候...' : '合并选定的文件' }}
+        {{ isMerging ? '处理中，请稍候...' : '合并选定的文件' }}
       </button>
     </div>
   </div>
@@ -97,7 +108,6 @@ export default {
       progressPercent: 0,
       progressMsg: '',
       dragIndex: null,
-      // 新增：记录刚才被点击移动的行号，用于展示高亮
       movedIndex: null
     }
   },
@@ -106,9 +116,14 @@ export default {
     window.eel.expose(this.setScanningStatus, 'set_scanning_status');
   },
   methods: {
+    // 新增：判断文件类型的方法
+    isWord(path) { return path && path.toLowerCase().endsWith('.docx'); },
+    isPdf(path) { return path && path.toLowerCase().endsWith('.pdf'); },
+
     getFileName(fullPath) {
       const nameWithExt = fullPath.split('\\').pop().split('/').pop();
-      return nameWithExt.replace(/\.docx$/i, '');
+      // 修改：同时剔除 .docx 和 .pdf 后缀，使其在列表里显示更干净
+      return nameWithExt.replace(/\.(docx|pdf)$/i, '');
     },
     updateProgress(percent, msg) {
       this.progressPercent = Math.round(percent);
@@ -148,7 +163,31 @@ export default {
       }
     },
 
-    // ================= 原生拖拽排序逻辑 =================
+    // ================= 核心新增：一键格式转换逻辑 =================
+    async executeConvert(file, mode) {
+      if (this.isMerging) return;
+
+      const originalName = file.displayName;
+      file.displayName = `正在转换中，请稍候...`;
+      this.isMerging = true; // 复用该状态锁定界面，防止用户乱点
+
+      try {
+        const res = await window.eel.py_fast_convert(file.path, mode)();
+        if (res.success) {
+          alert(`🎉 转换成功！\n文件已保存至：\n${res.path}`);
+        } else {
+          alert(`❌ 转换失败：${res.path}`);
+        }
+      } catch (e) {
+        alert("调用后端转换失败，请检查 Python 后端服务是否正常。");
+      } finally {
+        file.displayName = originalName;
+        this.isMerging = false;
+      }
+    },
+    // ==============================================================
+
+    // 原生拖拽排序逻辑保持不变
     dragStart(index, event) {
       this.dragIndex = index;
       event.dataTransfer.effectAllowed = 'move';
@@ -196,23 +235,17 @@ export default {
 
     selectAll(status) { this.files.forEach(f => f.selected = status); },
 
-    // ================= 核心新增：视野追踪与高亮机制 =================
     trackFocus(newIndex) {
-      // 1. 设置视觉高亮
       this.movedIndex = newIndex;
-      // 0.8秒后自动取消高亮
       setTimeout(() => {
         if (this.movedIndex === newIndex) {
           this.movedIndex = null;
         }
       }, 800);
 
-      // 2. 核心平滑滚动逻辑 (等 Vue 数据渲染到 DOM 后执行)
       nextTick(() => {
         const el = document.getElementById('row-' + newIndex);
         if (el) {
-          // behavior: 'smooth' 开启平滑滚动动画
-          // block: 'nearest' 表示如果元素跑出去了，就把它滚动到边缘刚好能看见的位置，不会引起剧烈的跳动
           el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }
       });
@@ -223,8 +256,6 @@ export default {
         const temp = this.files[index - 1];
         this.files[index - 1] = this.files[index];
         this.files[index] = temp;
-
-        // 调用追踪方法，并传入它最新的索引位置
         this.trackFocus(index - 1);
       }
     },
@@ -234,12 +265,9 @@ export default {
         const temp = this.files[index + 1];
         this.files[index + 1] = this.files[index];
         this.files[index] = temp;
-
-        // 调用追踪方法，并传入它最新的索引位置
         this.trackFocus(index + 1);
       }
     },
-    // ==============================================================
 
     async executeMerge() {
       const selectedItems = this.files.filter(f => f.selected).map(f => ({
@@ -274,7 +302,7 @@ export default {
 
 <style scoped>
 /* 样式基础 */
-.app-container { max-width: 600px; margin: 20px auto; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+.app-container { max-width: 650px; margin: 20px auto; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
 .title { color: #2c3e50; text-align: center; }
 .control-panel, .footer-panel { display: flex; justify-content: space-between; align-items: center; margin: 15px 0; }
 .path-text { color: #666; font-size: 0.9em; flex-grow: 1; margin-left: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -285,7 +313,7 @@ export default {
 /* 列表区 */
 .list-container { border: 1px solid #ddd; border-radius: 8px; overflow: hidden; margin-bottom: 15px; background: #fff;}
 .list-header { background: #f5f7fa; padding: 10px; font-weight: bold; font-size: 0.9em; border-bottom: 1px solid #ddd; }
-.file-list { max-height: 350px; overflow-y: auto; padding: 5px 10px; user-select: none; scroll-behavior: smooth; /* 增加全局原生平滑滚动 */}
+.file-list { max-height: 400px; overflow-y: auto; padding: 5px 10px; user-select: none; scroll-behavior: smooth; }
 
 /* 列表行样式 */
 .file-item {
@@ -295,20 +323,18 @@ export default {
   justify-content: space-between;
   align-items: center;
   background-color: #fff;
-  transition: transform 0.1s ease, background-color 0.4s ease; /* 增加背景颜色过渡动画 */
+  transition: transform 0.1s ease, background-color 0.4s ease;
   cursor: grab;
 }
 .file-item:hover { background-color: #f0f7ff; }
 .file-item:last-child { border-bottom: none; }
 .file-item:active { cursor: grabbing; }
 
-/* ================= 拖拽与高亮样式 ================= */
+/* 拖拽与高亮样式 */
 .dragging-ghost { opacity: 0.4; background-color: #e6f7ff; border: 1px dashed #1890ff; }
-/* 按钮点击移动后的高亮呼吸效果 */
 .is-moved { background-color: #e6f7ff !important; border-radius: 4px; box-shadow: inset 0 0 5px rgba(24,144,255,0.2);}
 .drag-handle { color: #ccc; font-weight: bold; margin-right: 8px; cursor: grab; font-size: 1.1em; letter-spacing: -2px;}
 .drag-handle:hover { color: #409eff; }
-/* ================================================== */
 
 .file-info { display: flex; align-items: center; gap: 8px; flex-grow: 1; overflow: hidden; }
 .file-index { color: #666; font-weight: 500;}
@@ -321,6 +347,13 @@ export default {
 .icon-btn { cursor: pointer; padding: 4px 8px; border: 1px solid #ddd; border-radius: 4px; background: white; color: #666; font-size: 0.8em; transition: 0.2s; }
 .icon-btn:hover:not(:disabled) { background: #e0f2f1; border-color: #26a69a; color: #00897b; }
 .icon-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+/* 新增：转换按钮的独立样式 */
+.convert-btn { color: #e6a23c; border-color: #f5dab1; background: #fdf6ec; font-weight: bold; }
+.convert-btn:hover:not(:disabled) { background: #e6a23c; color: white; border-color: #e6a23c; }
+.convert-btn-alt { color: #409eff; border-color: #b3d8ff; background: #ecf5ff; font-weight: bold; }
+.convert-btn-alt:hover:not(:disabled) { background: #409eff; color: white; border-color: #409eff; }
+
 button { cursor: pointer; padding: 8px 16px; border: none; border-radius: 4px; font-weight: bold; transition: 0.2s;}
 button:disabled { cursor: not-allowed; opacity: 0.6; }
 .primary-btn { background: #409eff; color: white; }
